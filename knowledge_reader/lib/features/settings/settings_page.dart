@@ -5,6 +5,9 @@ import '../../app/theme.dart';
 import '../../application/providers.dart';
 import '../../data/remote/server_client.dart';
 
+/// Connection state shown on the settings page.
+enum ConnectionState { unknown, checking, connected, failed }
+
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key, this.focusServer = false});
 
@@ -18,8 +21,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   final _urlController = TextEditingController();
   final _tokenController = TextEditingController();
   bool _initialised = false;
-  bool _busy = false;
-  String? _status;
+  ConnectionState _connection = ConnectionState.unknown;
+  String _connectionDetail = '';
 
   @override
   void dispose() {
@@ -35,7 +38,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       _urlController.text = config.baseUrl;
       _tokenController.text = config.token;
       _initialised = true;
+      if (config.isConfigured) {
+        // Quietly confirm the stored configuration the first time the page opens.
+        WidgetsBinding.instance.addPostFrameCallback((_) => _verify(quiet: true));
+      }
     }
+
     final preferences = ref.watch(preferencesProvider).value ?? const ReaderPreferences();
     final library = ref.watch(libraryIndexProvider).value ?? const {};
 
@@ -44,46 +52,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const _SectionTitle('服务器'),
-          TextField(
-            controller: _urlController,
-            autofocus: widget.focusServer,
-            decoration: const InputDecoration(
-              labelText: '服务地址',
-              hintText: 'https://reader.example.com 或 http://192.168.1.10:18765',
-              border: OutlineInputBorder(),
-            ),
+          _connectionCard(context, preferences),
+          const SizedBox(height: 20),
+          _sectionTitle(context, '阅读偏好'),
+          Text(
+            '以下设置即时生效，无需保存。',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _tokenController,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: '访问令牌',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              FilledButton(
-                onPressed: _busy ? null : _testConnection,
-                child: const Text('测试连接'),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton(
-                onPressed: _busy ? null : _save,
-                child: const Text('保存'),
-              ),
-            ],
-          ),
-          if (_status != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(_status!),
-            ),
-          const Divider(height: 36),
-          const _SectionTitle('阅读偏好'),
           Text('主题：${preferences.theme.label}'),
           SegmentedButton<ReaderTheme>(
             segments: [
@@ -91,8 +67,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ButtonSegment(value: theme, label: Text(theme.label)),
             ],
             selected: {preferences.theme},
-            onSelectionChanged: (selection) =>
-                ref.read(preferencesProvider.notifier).save(preferences.copyWith(theme: selection.first)),
+            onSelectionChanged: (selection) => ref
+                .read(preferencesProvider.notifier)
+                .save(preferences.copyWith(theme: selection.first)),
           ),
           const SizedBox(height: 16),
           Text('字号：${preferences.fontScale.toStringAsFixed(1)}'),
@@ -114,7 +91,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ref.read(preferencesProvider.notifier).save(preferences.copyWith(lineHeight: value)),
           ),
           const Divider(height: 36),
-          const _SectionTitle('本地存储'),
+          _sectionTitle(context, '本地存储'),
           Text('已下载文档：${library.length} 篇'),
           const SizedBox(height: 12),
           OutlinedButton.icon(
@@ -127,35 +104,136 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
-  Future<void> _save() async {
-    setState(() {
-      _busy = true;
-      _status = null;
-    });
-    final config = ServerConfig(baseUrl: _urlController.text.trim(), token: _tokenController.text.trim());
-    await ref.read(serverConfigProvider.notifier).save(config);
-    setState(() {
-      _busy = false;
-      _status = '已保存';
-    });
+  Widget _connectionCard(BuildContext context, ReaderPreferences preferences) {
+    final (icon, color, label) = switch (_connection) {
+      ConnectionState.connected => (Icons.cloud_done_outlined, Colors.green, '已连接'),
+      ConnectionState.failed => (Icons.cloud_off_outlined, Colors.redAccent, '连接失败'),
+      ConnectionState.checking => (Icons.cloud_sync_outlined, Colors.orange, '连接中…'),
+      ConnectionState.unknown => (Icons.cloud_queue, Colors.grey, '未验证'),
+    };
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionTitle(context, '服务器连接'),
+            Row(
+              children: [
+                Icon(icon, size: 18, color: color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _connectionDetail.isEmpty ? label : '$label · $_connectionDetail',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: color),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _urlController,
+              autofocus: widget.focusServer,
+              keyboardType: TextInputType.url,
+              decoration: const InputDecoration(
+                labelText: '服务地址',
+                hintText: 'https://reader.example.com',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _tokenController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: '访问令牌',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                FilledButton(
+                  onPressed: _connection == ConnectionState.checking ? null : _saveAndVerify,
+                  child: const Text('保存并测试连接'),
+                ),
+                const SizedBox(width: 12),
+                if (_connection == ConnectionState.connected)
+                  TextButton(
+                    onPressed: _clearConfig,
+                    child: const Text('清除配置'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Future<void> _testConnection() async {
+  Widget _sectionTitle(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(text, style: Theme.of(context).textTheme.titleMedium),
+      );
+
+  Future<void> _saveAndVerify() async {
+    final config = ServerConfig(
+      baseUrl: _urlController.text.trim(),
+      token: _tokenController.text.trim(),
+    );
+    await ref.read(serverConfigProvider.notifier).save(config);
+    await _verify();
+  }
+
+  Future<void> _verify({bool quiet = false}) async {
+    final config = ServerConfig(
+      baseUrl: _urlController.text.trim(),
+      token: _tokenController.text.trim(),
+    );
+    if (!config.isConfigured) {
+      setState(() {
+        _connection = ConnectionState.unknown;
+        _connectionDetail = '尚未填写服务地址或令牌';
+      });
+      return;
+    }
     setState(() {
-      _busy = true;
-      _status = '连接中…';
+      _connection = ConnectionState.checking;
+      _connectionDetail = '';
     });
-    final config = ServerConfig(baseUrl: _urlController.text.trim(), token: _tokenController.text.trim());
     try {
       final client = ServerClient(config: config);
       final health = await client.health();
       await client.fetchCatalog();
-      setState(() => _status = '连接成功：${health.service} ${health.version}');
+      if (!mounted) return;
+      setState(() {
+        _connection = ConnectionState.connected;
+        _connectionDetail = '${health.service} ${health.version}';
+      });
     } catch (error) {
-      setState(() => _status = '连接失败：$error');
-    } finally {
-      setState(() => _busy = false);
+      if (!mounted) return;
+      setState(() {
+        _connection = ConnectionState.failed;
+        _connectionDetail = error is ServerException ? error.message : '$error';
+      });
+      if (!quiet) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('连接失败：$_connectionDetail')),
+        );
+      }
     }
+  }
+
+  Future<void> _clearConfig() async {
+    await ref.read(serverConfigProvider.notifier).save(const ServerConfig(baseUrl: '', token: ''));
+    _urlController.clear();
+    _tokenController.clear();
+    setState(() {
+      _connection = ConnectionState.unknown;
+      _connectionDetail = '配置已清除';
+    });
   }
 
   Future<void> _clearLibrary() async {
@@ -165,18 +243,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       await store.removeItem(itemId);
     }
     ref.invalidate(libraryIndexProvider);
-    setState(() => _status = '已清理离线内容');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已清理离线内容')));
+    }
   }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Text(text, style: Theme.of(context).textTheme.titleMedium),
-      );
 }

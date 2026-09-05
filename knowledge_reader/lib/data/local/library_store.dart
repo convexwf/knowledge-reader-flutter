@@ -53,18 +53,32 @@ class ReadingProgress {
     required this.sectionId,
     required this.offset,
     required this.updatedAt,
+    this.sectionIndex,
+    this.sectionCount,
   });
 
   final String itemId;
   final String? sectionId;
   final double offset;
   final DateTime updatedAt;
+  final int? sectionIndex;
+  final int? sectionCount;
+
+  /// Rough completion ratio used by the library list.
+  double? get fraction {
+    final index = sectionIndex;
+    final total = sectionCount;
+    if (index == null || total == null || total <= 0) return null;
+    return ((index + offset) / total).clamp(0, 1);
+  }
 
   Map<String, dynamic> toJson() => {
         'itemId': itemId,
         'sectionId': sectionId,
         'offset': offset,
         'updatedAt': updatedAt.toIso8601String(),
+        if (sectionIndex != null) 'sectionIndex': sectionIndex,
+        if (sectionCount != null) 'sectionCount': sectionCount,
       };
 
   factory ReadingProgress.fromJson(Map<String, dynamic> json) {
@@ -73,6 +87,8 @@ class ReadingProgress {
       sectionId: json['sectionId'] as String?,
       offset: (json['offset'] as num?)?.toDouble() ?? 0,
       updatedAt: DateTime.tryParse('${json['updatedAt'] ?? ''}')?.toUtc() ?? DateTime.now().toUtc(),
+      sectionIndex: json['sectionIndex'] as int?,
+      sectionCount: json['sectionCount'] as int?,
     );
   }
 }

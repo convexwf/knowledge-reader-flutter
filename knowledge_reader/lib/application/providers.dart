@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +14,12 @@ import '../domain/model/document.dart';
 
 const _configKey = 'server_config';
 const _preferencesKey = 'reader_preferences';
+
+/// Keeps failure messages readable inside a list row.
+String _shortError(Object error) {
+  final text = error is ServerException ? error.message : '$error';
+  return text.length > 160 ? '${text.substring(0, 160)}…' : text;
+}
 
 final secureStorageProvider = Provider<FlutterSecureStorage>((ref) => const FlutterSecureStorage());
 
@@ -123,41 +130,78 @@ class LibraryIndexNotifier extends AsyncNotifier<Map<String, LocalItemState>> {
 final libraryIndexProvider =
     AsyncNotifierProvider<LibraryIndexNotifier, Map<String, LocalItemState>>(LibraryIndexNotifier.new);
 
-class DownloadState {
-  const DownloadState({this.received = 0, this.total = 0, this.error, this.done = false});
+enum DownloadPhase { idle, downloading, installing, done, failed, cancelled }
 
+class DownloadState {
+  const DownloadState({
+    this.phase = DownloadPhase.idle,
+    this.received = 0,
+    this.total = 0,
+    this.message,
+  });
+
+  final DownloadPhase phase;
   final int received;
   final int total;
-  final String? error;
-  final bool done;
+  final String? message;
 
   double? get progress => total > 0 ? received / total : null;
+  bool get isActive => phase == DownloadPhase.downloading || phase == DownloadPhase.installing;
+  bool get isDone => phase == DownloadPhase.done;
+  bool get hasFailed => phase == DownloadPhase.failed;
 }
 
 class DownloadNotifier extends Notifier<Map<String, DownloadState>> {
+  final Map<String, CancelToken> _tokens = {};
+
   @override
   Map<String, DownloadState> build() => const {};
 
+  bool isBusy(String itemId) => state[itemId]?.isActive ?? false;
+
+  void cancel(String itemId) {
+    _tokens.remove(itemId)?.cancel('cancelled by user');
+    _update(itemId, const DownloadState(phase: DownloadPhase.cancelled, message: '已取消'));
+  }
+
   Future<void> download(CatalogItem item) async {
+    if (isBusy(item.itemId)) return;
     final client = ref.read(serverClientProvider);
-    if (client == null) return;
+    if (client == null) {
+      _update(item.itemId, const DownloadState(phase: DownloadPhase.failed, message: '尚未配置服务器'));
+      return;
+    }
     final store = await ref.read(libraryStoreProvider.future);
-    _update(item.itemId, const DownloadState());
+    final token = CancelToken();
+    _tokens[item.itemId] = token;
+    _update(item.itemId, const DownloadState(phase: DownloadPhase.downloading));
     try {
       final result = await client.downloadPackage(
         itemId: item.itemId,
         target: store.tempArchive(item.itemId),
-        onProgress: (received, total) => _update(item.itemId, DownloadState(received: received, total: total)),
+        cancelToken: token,
+        onProgress: (received, total) {
+          if (token.isCancelled) return;
+          _update(
+            item.itemId,
+            DownloadState(phase: DownloadPhase.downloading, received: received, total: total),
+          );
+        },
       );
       if (result.notModified) {
-        _update(item.itemId, const DownloadState(done: true));
+        _update(item.itemId, const DownloadState(phase: DownloadPhase.done));
       } else if (result.file != null) {
+        _update(item.itemId, const DownloadState(phase: DownloadPhase.installing, received: 1, total: 1));
         await store.installPackage(itemId: item.itemId, archiveFile: result.file!);
-        _update(item.itemId, const DownloadState(done: true));
+        _update(item.itemId, const DownloadState(phase: DownloadPhase.done));
       }
       ref.invalidate(libraryIndexProvider);
+    } on ServerException catch (error) {
+      _update(item.itemId, DownloadState(phase: DownloadPhase.failed, message: error.message));
     } catch (error) {
-      _update(item.itemId, DownloadState(error: '$error'));
+      _update(item.itemId, DownloadState(phase: DownloadPhase.failed, message: _shortError(error)));
+    } finally {
+      _tokens.remove(item.itemId);
     }
   }
 
@@ -167,6 +211,22 @@ class DownloadNotifier extends Notifier<Map<String, DownloadState>> {
 }
 
 final downloadProvider = NotifierProvider<DownloadNotifier, Map<String, DownloadState>>(DownloadNotifier.new);
+
+/// Reading progress for every item, used by the library list.
+class ProgressNotifier extends AsyncNotifier<Map<String, ReadingProgress>> {
+  @override
+  Future<Map<String, ReadingProgress>> build() async {
+    final store = await ref.watch(libraryStoreProvider.future);
+    return store.readProgress();
+  }
+
+  Future<void> refresh() async {
+    state = await AsyncValue.guard(build);
+  }
+}
+
+final progressProvider =
+    AsyncNotifierProvider<ProgressNotifier, Map<String, ReadingProgress>>(ProgressNotifier.new);
 
 /// Reader state for the currently opened item.
 class ReaderState {
@@ -217,7 +277,12 @@ class ReaderNotifier extends AsyncNotifier<ReaderState?> {
     return ReaderState(item: item, warning: '文档未下载，请先在库中下载离线包');
   }
 
-  Future<void> saveProgress(String sectionId, double offset) async {
+  Future<void> saveProgress(
+    String sectionId,
+    double offset, {
+    int? sectionIndex,
+    int? sectionCount,
+  }) async {
     final current = state.value;
     if (current == null) return;
     final store = await ref.read(libraryStoreProvider.future);
@@ -226,7 +291,10 @@ class ReaderNotifier extends AsyncNotifier<ReaderState?> {
       sectionId: sectionId,
       offset: offset,
       updatedAt: DateTime.now().toUtc(),
+      sectionIndex: sectionIndex,
+      sectionCount: sectionCount,
     ));
+    await ref.read(progressProvider.notifier).refresh();
   }
 }
 

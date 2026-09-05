@@ -77,7 +77,8 @@ flutter build apk --debug --dart-define=SERVER_BASE_URL=http://127.0.0.1:18765 -
 ### Android / 设备
 
 - **`flutter test integration_test/...` 产出的 APK 不能当应用安装**：它的入口是 `flutter_test_listener.dart`，单独启动会一直停在启动画面等 VM service。手动体验请用 `flutter run` 或 `flutter build apk` 的产物。
-- 明文 HTTP 只对 debug 开放（`android/app/src/debug/AndroidManifest.xml` 的 `usesCleartextTraffic`），release 保持 HTTPS 强制，不要把这个属性加进主清单。
+- 明文 HTTP 目前在主清单里放行（`android:usesCleartextTraffic="true"`）：demo 包要让用户填局域网/本地 `http://` 地址。踩过的坑——只在 debug 清单开这个开关时，release 包连不上 `http://` 服务器，而列表看起来"正常"是因为 `CatalogNotifier` 回退读了本地缓存的 `catalog.json`，卸载重装后才暴露。正式分发前应收紧为仅 HTTPS。
+- **`INTERNET` 权限必须写进主清单**：Flutter 模板只把 `android.permission.INTERNET` 放在 `src/debug` 与 `src/profile` 的清单里，release 包因此完全没有网络能力（症状是"连接失败"，而 debug 包一切正常，极易误判为服务端或 adb 问题）。用 `aapt2 dump permissions <apk>` 可以直接验证。
 - 单元测试里不能用 `path_provider` / `flutter_secure_storage` 等插件；`LibraryStore.open(rootOverride:, cacheOverride:)` 就是为此准备的注入点。
 - 用 adb 盲操 UI 不可靠（软键盘遮挡、坐标漂移）。需要程序化验证时写 integration test，不要靠 `adb shell input tap`。
 

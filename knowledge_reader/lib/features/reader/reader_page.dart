@@ -67,7 +67,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     if (sectionIndex < 0 || sectionIndex >= document.sections.length) return;
     final section = document.sections[sectionIndex];
     final sectionId = section.sectionId ?? section.anchorId ?? 'index-$sectionIndex';
-    await ref.read(readerProvider.notifier).saveProgress(sectionId, first.itemLeadingEdge.clamp(0, 1));
+    await ref.read(readerProvider.notifier).saveProgress(
+          sectionId,
+          first.itemLeadingEdge.clamp(0, 1),
+          sectionIndex: sectionIndex,
+          sectionCount: document.sections.length,
+        );
   }
 
   @override

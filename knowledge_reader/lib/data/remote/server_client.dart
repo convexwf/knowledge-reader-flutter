@@ -112,6 +112,7 @@ class ServerClient {
     required File target,
     String? etag,
     void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
   }) async {
     try {
       await target.parent.create(recursive: true);
@@ -123,6 +124,7 @@ class ServerClient {
           receiveTimeout: const Duration(minutes: 10),
         ),
         onReceiveProgress: onProgress,
+        cancelToken: cancelToken,
       );
       if (response.statusCode == 304) {
         if (await target.exists()) await target.delete();
@@ -134,6 +136,10 @@ class ServerClient {
         file: target,
       );
     } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) {
+        if (await target.exists()) await target.delete();
+        throw ServerException('下载已取消');
+      }
       throw _toServerException(error);
     }
   }
@@ -149,9 +155,22 @@ class ServerClient {
   ServerException _toServerException(DioException error) {
     final status = error.response?.statusCode;
     final data = error.response?.data;
-    final message = data is Map && data['message'] is String
-        ? data['message'] as String
-        : error.message ?? error.type.name;
+    if (data is Map && data['message'] is String) {
+      return ServerException(data['message'] as String, statusCode: status);
+    }
+    // Map transport failures to short, actionable text: Dio's own messages run
+    // to several lines and leak implementation detail into the UI.
+    final message = switch (error.type) {
+      DioExceptionType.connectionError => '无法连接到服务器，请检查地址与网络',
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout =>
+        '连接超时，请稍后重试',
+      DioExceptionType.badCertificate => '服务器证书校验失败',
+      DioExceptionType.badResponse => '服务器返回错误${status == null ? '' : '（HTTP $status）'}',
+      DioExceptionType.cancel => '请求已取消',
+      _ => '网络请求失败，请检查地址与网络',
+    };
     return ServerException(message, statusCode: status);
   }
 

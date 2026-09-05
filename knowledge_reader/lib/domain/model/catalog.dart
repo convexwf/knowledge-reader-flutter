@@ -41,6 +41,7 @@ class CatalogItem {
     this.packageBytes,
     this.assetCount,
     this.sectionCount,
+    this.sourceUrl,
   });
 
   final String itemId;
@@ -54,6 +55,7 @@ class CatalogItem {
   final int? packageBytes;
   final int? assetCount;
   final int? sectionCount;
+  final String? sourceUrl;
 
   factory CatalogItem.fromJson(Map<String, dynamic> json) {
     return CatalogItem(
@@ -68,6 +70,7 @@ class CatalogItem {
       packageBytes: json['packageBytes'] as int?,
       assetCount: json['assetCount'] as int?,
       sectionCount: json['sectionCount'] as int?,
+      sourceUrl: json['sourceUrl'] as String?,
     );
   }
 
@@ -83,9 +86,18 @@ class CatalogItem {
         if (packageBytes != null) 'packageBytes': packageBytes,
         if (assetCount != null) 'assetCount': assetCount,
         if (sectionCount != null) 'sectionCount': sectionCount,
+        if (sourceUrl != null) 'sourceUrl': sourceUrl,
       };
 
   bool get isParsed => state == 'parsed';
+
+  /// Host shown in the library list; falls back to the source type for items
+  /// without a URL (for example imported EPUB books).
+  String get sourceLabel {
+    final url = sourceUrl;
+    if (url == null || url.isEmpty) return sourceType;
+    return Uri.tryParse(url)?.host ?? sourceType;
+  }
 }
 
 /// Offline package manifest written by the server (`manifest.json`).

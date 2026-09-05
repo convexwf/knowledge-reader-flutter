@@ -58,6 +58,8 @@ void main() {
       expect(entry.contentHash, isNotNull);
       expect(entry.packageBytes, isNotNull);
       expect(entry.sectionCount, greaterThan(0));
+      expect(entry.sourceUrl, pageUrl);
+      expect(entry.sourceLabel, 'example.com');
 
       final store = await LibraryStore.open(
         rootOverride: Directory(p.join(workspace.path, 'support')),
