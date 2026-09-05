@@ -132,7 +132,8 @@ make rebuild    # 构建插件 + 重建镜像 + 重启；服务端改动交付�
 
 - 触发：push 到 `master`、手动 `workflow_dispatch`；PR 只构建不发布。
 - 流程：`flutter analyze` → `flutter test` → `flutter build apk --release`（通用包，**不注入** `--dart-define`）→ 上传 artifact → 发布 job 更新 release。
-- **只保留一个 release 的机制**：固定 `tag_name: demo`（tag 与 release 一对一，所以不可能出现第二个）+ `overwrite_files: true`（替换同名资产，而不是跳过）。这套写法来自 `convexwf/stardew-agent`。
+- **只保留一个 release 的机制**：固定 tag `demo`（tag 与 release 一对一，所以不可能出现第二个）+ 上传时 `--clobber`（替换同名资产而不是跳过）。这套语义来自 `convexwf/stardew-agent`。
+- 发布用 runner 自带的 `gh` CLI，不用 `softprops/action-gh-release`：后者在**分支推送**且 release 已存在时会以 `Unexpected error fetching GitHub release for tag refs/heads/master` 失败（首次创建能过，第二次必挂，已经踩过）。`gh` 的语义是"存在则 upload --clobber + edit，不存在则 create"，完全可控。
 - 发布 job 单独声明 `permissions: { actions: read, contents: write }`，并带 `concurrency: { group: knowledge-reader-demo-release, cancel-in-progress: false }` 串行化，避免两次 push 同时替换资产。
 
 ### demo 签名（重要）

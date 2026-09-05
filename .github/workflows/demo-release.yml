@@ -186,5 +186,3 @@ jobs:
               --repo "${GITHUB_REPOSITORY}"
           fi
           gh release view demo --repo "${GITHUB_REPOSITORY}" --json tagName,name,isPrerelease,assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
