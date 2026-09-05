@@ -145,22 +145,46 @@ jobs:
           cp "$apk" release-assets/knowledge-reader-demo.apk
           ls -la release-assets
 
-      - name: Create or update demo release
-        uses: softprops/action-gh-release@v2
-        with:
-          # Fixed tag: one tag maps to one release, so this can only ever
-          # update the existing demo release. overwrite_files replaces the
-          # previous APK asset of the same name instead of skipping it.
-          tag_name: demo
-          name: Demo Build
-          prerelease: true
-          overwrite_files: true
-          body: |
-            自动构建的 Knowledge Reader Demo 安装包（通用 release APK）。
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          自动构建的 Knowledge Reader Demo 安装包（通用 release APK）。
 
-            - 构建提交：${{ github.sha }}
-            - 构建时间：${{ github.run_started_at }}
-            - 服务地址：安装后首次打开时填写，之后会保存在本机，无需重复设置。
-          files: release-assets/knowledge-reader-demo.apk
+          - 构建提交：${GITHUB_SHA}
+          - 构建时间：$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          - 服务地址：安装后首次打开时填写，之后会保存在本机，无需重复设置。
+          EOF
+          cat release-notes.md
+
+      # A fixed tag maps to exactly one release, so this can only ever update
+      # the single demo release; `--clobber` replaces the previous APK asset
+      # instead of skipping it. Implemented with the preinstalled gh CLI rather
+      # than a third-party action: softprops/action-gh-release@v2 aborts on
+      # branch pushes with "Unexpected error fetching GitHub release for tag
+      # refs/heads/master" once the release already exists.
+      - name: Publish demo release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=release-assets/knowledge-reader-demo.apk
+          if gh release view demo --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload demo "$apk" --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit demo \
+              --title "Demo Build" \
+              --prerelease \
+              --notes-file release-notes.md \
+              --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create demo "$apk" \
+              --title "Demo Build" \
+              --prerelease \
+              --notes-file release-notes.md \
+              --repo "${GITHUB_REPOSITORY}"
+          fi
+          gh release view demo --repo "${GITHUB_REPOSITORY}" --json tagName,name,isPrerelease,assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
