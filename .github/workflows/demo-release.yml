@@ -62,6 +62,12 @@ jobs:
           set -euo pipefail
           if [ -z "${DEMO_KEYSTORE_BASE64}" ] || [ -z "${DEMO_KEYSTORE_PASSWORD}" ] \
              || [ -z "${DEMO_KEY_ALIAS}" ] || [ -z "${DEMO_KEY_PASSWORD}" ]; then
+            if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+              # Fork pull requests never receive secrets; build with the debug
+              # fallback instead of failing, and do not publish anyway.
+              echo "::warning title=Demo signing skipped::Pull request builds run without the demo keystore and fall back to debug signing."
+              exit 0
+            fi
             echo "::error title=Missing demo signing secrets::Add DEMO_KEYSTORE_BASE64, DEMO_KEYSTORE_PASSWORD, DEMO_KEY_ALIAS and DEMO_KEY_PASSWORD to the repository Actions secrets. Without a stable signature each build gets a different key, so users cannot update in place and lose their saved server settings."
             exit 1
           fi
@@ -81,6 +87,10 @@ jobs:
         run: |
           set -euo pipefail
           apk="knowledge_reader/build/app/outputs/flutter-apk/app-release.apk"
+          if [ ! -f knowledge_reader/android/key.properties ]; then
+            echo "::warning title=Signature check skipped::No demo keystore was configured (pull request build); APK is debug signed."
+            exit 0
+          fi
           apksigner="$(find "${ANDROID_SDK_ROOT}/build-tools" -name apksigner -type f | sort | tail -1)"
           certs="$("$apksigner" verify --print-certs "$apk" | head -3)"
           echo "$certs"
