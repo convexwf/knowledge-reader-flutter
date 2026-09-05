@@ -4,4 +4,8 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug builds talk to a local knowledge-ingest-server over plain HTTP.
+         Release builds keep cleartext disabled and require HTTPS, matching the
+         security rules in doc/android-reader-design.md. -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>

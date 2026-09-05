@@ -1,0 +1,145 @@
+{
+  "specVersion": 1,
+  "cases": [
+    {
+      "name": "plain-text",
+      "input": "hello world",
+      "tokens": [{ "type": "text", "value": "hello world" }]
+    },
+    {
+      "name": "bold",
+      "input": "a **b** c",
+      "tokens": [
+        { "type": "text", "value": "a " },
+        { "type": "strong", "children": [{ "type": "text", "value": "b" }] },
+        { "type": "text", "value": " c" }
+      ]
+    },
+    {
+      "name": "emphasis-underscore",
+      "input": "a _b_ c",
+      "tokens": [
+        { "type": "text", "value": "a " },
+        { "type": "em", "children": [{ "type": "text", "value": "b" }] },
+        { "type": "text", "value": " c" }
+      ]
+    },
+    {
+      "name": "emphasis-asterisk-alias",
+      "input": "a *b* c",
+      "tokens": [
+        { "type": "text", "value": "a " },
+        { "type": "em", "children": [{ "type": "text", "value": "b" }] },
+        { "type": "text", "value": " c" }
+      ]
+    },
+    {
+      "name": "strong-underscore-alias",
+      "input": "__b__",
+      "tokens": [{ "type": "strong", "children": [{ "type": "text", "value": "b" }] }]
+    },
+    {
+      "name": "strong-emphasis",
+      "input": "***x***",
+      "tokens": [
+        { "type": "strong", "children": [{ "type": "em", "children": [{ "type": "text", "value": "x" }] }] }
+      ]
+    },
+    {
+      "name": "strikethrough",
+      "input": "~~x~~",
+      "tokens": [{ "type": "del", "children": [{ "type": "text", "value": "x" }] }]
+    },
+    {
+      "name": "inline-code-keeps-markers",
+      "input": "`a**b**c`",
+      "tokens": [{ "type": "code", "value": "a**b**c" }]
+    },
+    {
+      "name": "link-with-emphasis",
+      "input": "[see _this_](https://example.com)",
+      "tokens": [
+        {
+          "type": "link",
+          "href": "https://example.com",
+          "children": [
+            { "type": "text", "value": "see " },
+            { "type": "em", "children": [{ "type": "text", "value": "this" }] }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unsafe-link-stays-text",
+      "input": "[a](javascript:alert(1))",
+      "tokens": [{ "type": "text", "value": "[a](javascript:alert(1))" }]
+    },
+    {
+      "name": "inline-image",
+      "input": "![alt](https://example.com/a.png)",
+      "tokens": [{ "type": "inline_image", "src": "https://example.com/a.png", "alt": "alt" }]
+    },
+    {
+      "name": "inline-math",
+      "input": "vote $a^2+b^2$ here",
+      "tokens": [
+        { "type": "text", "value": "vote " },
+        { "type": "math", "value": "a^2+b^2" },
+        { "type": "text", "value": " here" }
+      ]
+    },
+    {
+      "name": "soft-break",
+      "input": "a\nb",
+      "tokens": [
+        { "type": "text", "value": "a" },
+        { "type": "soft_break" },
+        { "type": "text", "value": "b" }
+      ]
+    },
+    {
+      "name": "autolink",
+      "input": "see https://example.com/a",
+      "tokens": [
+        { "type": "text", "value": "see " },
+        {
+          "type": "link",
+          "href": "https://example.com/a",
+          "children": [{ "type": "text", "value": "https://example.com/a" }]
+        }
+      ]
+    },
+    {
+      "name": "autolink-drops-cjk-punctuation",
+      "input": "见 https://example.com/a。",
+      "tokens": [
+        { "type": "text", "value": "见 " },
+        {
+          "type": "link",
+          "href": "https://example.com/a",
+          "children": [{ "type": "text", "value": "https://example.com/a" }]
+        },
+        { "type": "text", "value": "。" }
+      ]
+    },
+    {
+      "name": "escaped-underscore",
+      "input": "\\_literal\\_",
+      "tokens": [{ "type": "text", "value": "_literal_" }]
+    },
+    {
+      "name": "nested-emphasis-inside-strong",
+      "input": "**a _b_ c**",
+      "tokens": [
+        {
+          "type": "strong",
+          "children": [
+            { "type": "text", "value": "a " },
+            { "type": "em", "children": [{ "type": "text", "value": "b" }] },
+            { "type": "text", "value": " c" }
+          ]
+        }
+      ]
+    }
+  ]
+}

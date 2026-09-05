@@ -20,6 +20,7 @@
 - [2 系统上下文](#2-系统上下文)
   - [2.1 服务端现状](#21-服务端现状)
   - [2.2 服务端 API 现状](#22-服务端-api-现状)
+  - [2.3 本地联调](#23-本地联调)
 - [3 总体架构](#3-总体架构)
   - [3.1 分层](#31-分层)
   - [3.2 源码目录结构](#32-源码目录结构)
@@ -125,6 +126,37 @@ EPUB 不会形成集合：一整本书是一个 item，章节是同一文档中�
 | -------------------------------- | -------------------------- |
 | `GET /api/sync/catalog`          | 目录快照（含内容指纹）      |
 | `GET /api/items/:itemId/package` | 单 item 离线包（zip）       |
+
+### 2.3 本地联调
+
+开发期把模拟器或真机指向本机的 knowledge-ingest-server：
+
+```bash
+# 把设备的 18765 端口转发到宿主机的 18765（容器只发布在宿主 127.0.0.1 上）
+adb reverse tcp:18765 tcp:18765
+```
+
+随后在应用设置页填写 `http://127.0.0.1:18765` 与令牌。明文 HTTP 只对 debug 构建开放：`android/app/src/debug/AndroidManifest.xml` 里设置 `android:usesCleartextTraffic="true"`，release 构建不含该属性，因此仍强制 HTTPS。
+
+端到端测试直接跑在设备上：
+
+```bash
+flutter test integration_test/app_test.dart -d <device-id>
+```
+
+该测试默认访问 `http://127.0.0.1:18765`（依赖上面的 adb reverse），可用 `--dart-define=SERVER_BASE_URL=https://your-server` 覆盖；服务端不可达时测试自我跳过。
+
+注意：`flutter test integration_test/...` 编译出的 APK 入口是测试监听器（`flutter_test_listener.dart`），单独安装启动会停在启动画面等待 VM service，不能当普通应用运行。手动体验请用 `flutter run -d <device>` 或先 `flutter build apk --debug` 再安装，不要把集成测试产出的 APK 当作可运行包。
+
+调试构建可以内置服务器配置，安装后无需手工填写：
+
+```bash
+flutter build apk --debug \
+  --dart-define=SERVER_BASE_URL=http://127.0.0.1:18765 \
+  --dart-define=SERVER_TOKEN=dev-token
+```
+
+`SERVER_BASE_URL` 非空且本地尚无配置时，应用会在首次启动把这两个值写入安全存储；已有配置仍然优先，用户之后在设置页的修改不会被覆盖。仅在本地调试构建中使用该方式，发布构建不要内置令牌。
 
 现有 `/api/items` 不足以支撑离线同步：它只有 `limit`（≤500），响应里没有内容指纹与包大小，客户端无法判断本地副本是否过期。因此需要新增一个目录快照端点，返回紧凑且字段稳定的元数据集合。
 
@@ -309,7 +341,7 @@ sequenceDiagram
 - 配额：默认不设硬上限，设置页展示总占用并提供"清理全部离线内容"。
 - 回收：`items/<itemId>/` 下非 active 的版本目录在下次启动或同步时移入 `trash/` 并删除。
 - 临时区：应用启动时清空 `tmp/`；解压中途失败留下的目录同样在启动时清理。
-- 磁盘预检：下载前按包大小 × 3 检查可用空间（预留解压余量），不足则拒绝下载并提示。
+- 磁盘预检：下载前按目录快照的 `packageBytes`（未压缩内容字节）× 3 检查可用空间（预留解压余量），不足则拒绝下载并提示。
 
 ## 6 离线包契约
 
@@ -332,6 +364,7 @@ sequenceDiagram
 - 路径使用包内相对路径与 `/` 分隔符，不使用平台路径分隔符。
 - `document.json` 必须是规范化序列化结果：字段顺序稳定、无多余空白、`sections` 顺序与数组顺序一致。
 - 不使用 zip 文件本身的字节摘要作为 hash：压缩实现与时间戳会让同一内容产生不同字节。
+- 指纹覆盖包内文件的真实字节，因此 `doc_id` 与 `section_id` 变化（例如重新解析生成新标识）同样会改变指纹。这是保守方向：客户端最多多下载一次，不会读到过期内容。
 - 客户端下载后必须复算并校验，校验失败按第 11 章处理。
 
 ### 6.2 包结构
@@ -390,6 +423,7 @@ If-None-Match: "<snapshotEtag>"
       "sourceType": "url",
       "state": "parsed",
       "updatedAt": "2026-09-11T12:00:00.000Z",
+      "parsedAt": "2026-09-11T12:00:00.000Z",
       "contentHash": "…",
       "packageBytes": 482113,
       "assetCount": 3,
@@ -404,6 +438,7 @@ If-None-Match: "<snapshotEtag>"
 - 一次返回全量快照，客户端整份替换本地 `catalog.json`，不做翻页。
 - 响应带 `ETag`；客户端回传 `If-None-Match`，未变化时服务端返回 `304`，客户端跳过整轮比对。
 - 该端点只返回元数据，不夹带正文。
+- `packageBytes` 是包内文件未压缩字节总和（`document.json` 加 `markdown.md` 加 `assets/**`），不是 zip 压缩后的体积。服务端在写入 item 时就算好并落库，快照查询不再重新打包；历史数据在首次查询时惰性补齐。
 - 客户端以 `itemId` 与 `contentHash` 做本地差异：快照中有而本地没有表示新增；`contentHash` 不同表示内容已变、需要重新下载离线包；本地有而快照中没有表示已删除，客户端清理对应的离线包。
 
 #### 为什么 v1 不做增量同步
