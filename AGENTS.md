@@ -52,6 +52,11 @@ flutter build apk --debug --dart-define=SERVER_BASE_URL=http://127.0.0.1:18765 -
 
 ## 4 已知坑（都是踩过的，避免重复）
 
+### 工具与编码
+
+- **PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 UTF-8 BOM**。BOM 会让 `.properties`、`key.properties`、凭据文件的首个键变成 `\uFEFFkey`，症状是 Gradle 打包失败或脚本 KeyError（这两种都踩过）。写这类文件用 `[System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))`。
+- 复杂命令（含 `$(...)`、嵌套引号）交给 PowerShell 传参会被吃掉，把它写成脚本文件再执行，别硬拼引号。
+
 ### Flutter / Riverpod
 
 - Riverpod 3.x 没有 `AsyncValue.valueOrNull`，用 `.value`。
@@ -120,3 +125,22 @@ make rebuild    # 构建插件 + 重建镜像 + 重启；服务端改动交付�
 - 不要执行 `make clean-store` 或任何删除 `knowledge-store` 的命令，除非用户明确要求。
 - 端到端测试要自建 fixture 并**自己清理**（用 `DELETE /api/items/:itemId?mode=purge`），不要把测试数据留在用户的目录里。
 - 临时文件不要留在仓库；本环境删除被策略拦截时，把文件移到 `C:\workspace\_trash_knowledge_root\` 并告知用户。
+
+## 8 发布流水线（demo）
+
+`.github/workflows/demo-release.yml`：
+
+- 触发：push 到 `master`、手动 `workflow_dispatch`；PR 只构建不发布。
+- 流程：`flutter analyze` → `flutter test` → `flutter build apk --release`（通用包，**不注入** `--dart-define`）→ 上传 artifact → 发布 job 更新 release。
+- **只保留一个 release 的机制**：固定 `tag_name: demo`（tag 与 release 一对一，所以不可能出现第二个）+ `overwrite_files: true`（替换同名资产，而不是跳过）。这套写法来自 `convexwf/stardew-agent`。
+- 发布 job 单独声明 `permissions: { actions: read, contents: write }`，并带 `concurrency: { group: knowledge-reader-demo-release, cancel-in-progress: false }` 串行化，避免两次 push 同时替换资产。
+
+### demo 签名（重要）
+
+Flutter 模板默认用**本机 debug keystore** 签 release 包，而 GitHub runner 是一次性的、每次都会生成不同的 debug key——那样每个 demo 包签名都不同，用户无法覆盖安装，只能卸载重装，**本机保存的服务器配置会随之丢失**。因此：
+
+- CI 用固定密钥签名：keystore 以 base64 存在 repo secret 里，workflow 解码后写 `android/key.properties`。
+- 需要的 secrets：`DEMO_KEYSTORE_BASE64`、`DEMO_KEYSTORE_PASSWORD`、`DEMO_KEY_ALIAS`、`DEMO_KEY_PASSWORD`（已配置；缺失时 workflow 会带明确提示失败）。
+- 密钥备份在仓库外：`C:\workspace\.secrets\knowledge-reader-demo.jks`，凭据在同目录的 `knowledge-reader-demo-credentials.txt`。**不要删、不要丢**——换 key 等同于换签名，所有已安装用户都会被迫卸载重装。
+- 本地：`android/key.properties`（已被 gitignore）指向上面这个 keystore，所以本地 release 包与 CI 同签名；缺这个文件时 gradle 回退 debug 签名，本地开发不受影响。
+- 该密钥只用于 demo 分发，不要用于 Play 上架。

@@ -1,0 +1,156 @@
+name: Demo Release
+
+# Push to master (or a manual run) rebuilds the demo APK and republishes it to
+# the single `demo` GitHub Release. The release is never recreated: the latest
+# run overwrites the asset in place, so the tag, the release page and the
+# download URL stay stable.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build demo APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Keep this pinned to the SDK version used locally; bump both
+          # together so build behaviour does not drift between machines.
+          flutter-version: 3.47.4
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: knowledge_reader
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: knowledge_reader
+        run: flutter analyze
+
+      - name: Run tests
+        # test/live_server_test.dart skips itself when no server is reachable,
+        # so this stays green in CI.
+        working-directory: knowledge_reader
+        run: flutter test
+
+      - name: Configure demo signing
+        working-directory: knowledge_reader/android
+        env:
+          DEMO_KEYSTORE_BASE64: ${{ secrets.DEMO_KEYSTORE_BASE64 }}
+          DEMO_KEYSTORE_PASSWORD: ${{ secrets.DEMO_KEYSTORE_PASSWORD }}
+          DEMO_KEY_ALIAS: ${{ secrets.DEMO_KEY_ALIAS }}
+          DEMO_KEY_PASSWORD: ${{ secrets.DEMO_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEMO_KEYSTORE_BASE64}" ] || [ -z "${DEMO_KEYSTORE_PASSWORD}" ] \
+             || [ -z "${DEMO_KEY_ALIAS}" ] || [ -z "${DEMO_KEY_PASSWORD}" ]; then
+            echo "::error title=Missing demo signing secrets::Add DEMO_KEYSTORE_BASE64, DEMO_KEYSTORE_PASSWORD, DEMO_KEY_ALIAS and DEMO_KEY_PASSWORD to the repository Actions secrets. Without a stable signature each build gets a different key, so users cannot update in place and lose their saved server settings."
+            exit 1
+          fi
+          printf '%s' "${DEMO_KEYSTORE_BASE64}" | base64 --decode > app/demo-keystore.jks
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=demo-keystore.jks\n' \
+            "${DEMO_KEYSTORE_PASSWORD}" "${DEMO_KEY_PASSWORD}" "${DEMO_KEY_ALIAS}" > key.properties
+          ls -la app/demo-keystore.jks key.properties
+
+      - name: Build universal release APK
+        # No --dart-define here: the demo build ships unconfigured and asks the
+        # reader for the server address once.
+        working-directory: knowledge_reader
+        run: flutter build apk --release
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="knowledge_reader/build/app/outputs/flutter-apk/app-release.apk"
+          apksigner="$(find "${ANDROID_SDK_ROOT}/build-tools" -name apksigner -type f | sort | tail -1)"
+          certs="$("$apksigner" verify --print-certs "$apk" | head -3)"
+          echo "$certs"
+          if echo "$certs" | grep -q "CN=Android Debug"; then
+            echo "::error title=Debug signature::The APK was signed with the debug key. Check that the signing secrets decoded correctly."
+            exit 1
+          fi
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp knowledge_reader/build/app/outputs/flutter-apk/app-release.apk \
+             artifact/knowledge-reader-demo.apk
+          ls -la artifact
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-apk-${{ github.run_number }}
+          path: artifact/
+          retention-days: 3
+
+  release:
+    name: Update demo GitHub Release
+    needs:
+      - build
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    concurrency:
+      # Serialise releases instead of cancelling: two overlapping pushes must
+      # not race while replacing the same asset.
+      group: knowledge-reader-demo-release
+      cancel-in-progress: false
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          apk="$(find artifacts -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          cp "$apk" release-assets/knowledge-reader-demo.apk
+          ls -la release-assets
+
+      - name: Create or update demo release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Fixed tag: one tag maps to one release, so this can only ever
+          # update the existing demo release. overwrite_files replaces the
+          # previous APK asset of the same name instead of skipping it.
+          tag_name: demo
+          name: Demo Build
+          prerelease: true
+          overwrite_files: true
+          body: |
+            自动构建的 Knowledge Reader Demo 安装包（通用 release APK）。
+
+            - 构建提交：${{ github.sha }}
+            - 构建时间：${{ github.run_started_at }}
+            - 服务地址：安装后首次打开时填写，之后会保存在本机，无需重复设置。
+          files: release-assets/knowledge-reader-demo.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
