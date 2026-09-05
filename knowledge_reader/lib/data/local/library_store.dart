@@ -290,6 +290,39 @@ class LibraryStore {
     await _writeLibrary(library);
   }
 
+  /// Drops local packages (and their reading progress) whose items vanished
+  /// from the server catalog. Returns the removed item ids.
+  ///
+  /// Callers must only invoke this with a *fresh* catalog snapshot: pruning from
+  /// a stale or cached snapshot could delete content that still exists.
+  Future<List<String>> pruneMissing(Set<String> keepItemIds) async {
+    final library = await readLibrary();
+    final orphans = library.keys.where((itemId) => !keepItemIds.contains(itemId)).toList(growable: false);
+    if (orphans.isEmpty) return const [];
+
+    for (final itemId in orphans) {
+      final directory = itemDirectory(itemId);
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+      library.remove(itemId);
+    }
+    await _writeLibrary(library);
+
+    final progress = await readProgress();
+    var progressChanged = false;
+    for (final itemId in orphans) {
+      progressChanged = progress.remove(itemId) != null || progressChanged;
+    }
+    if (progressChanged) {
+      await _writeJson(progressFile, {
+        'schemaVersion': 1,
+        'items': progress.map((key, value) => MapEntry(key, value.toJson())),
+      });
+    }
+    return orphans;
+  }
+
   Future<void> _pruneVersions(String itemId, String keepHash) async {
     final directory = itemDirectory(itemId);
     if (!await directory.exists()) return;

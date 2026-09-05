@@ -42,10 +42,8 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          catalogProvider.overrideWith(() => _FakeCatalog(CatalogSnapshot(
-                schemaVersion: 1,
-                serverTime: now,
-                items: items,
+          catalogProvider.overrideWith(() => _FakeCatalog(CatalogState(
+                snapshot: CatalogSnapshot(schemaVersion: 1, serverTime: now, items: items),
               ))),
           libraryIndexProvider.overrideWith(() => _FakeLibrary(library)),
           progressProvider.overrideWith(() => _FakeProgress(progress)),
@@ -134,15 +132,48 @@ void main() {
     expect(find.text('无法连接到服务器'), findsOneWidget);
     expect(find.byIcon(Icons.refresh), findsOneWidget);
   });
+
+  testWidgets('announces packages removed by a server-side deletion', (tester) async {
+    final catalog = _FakeCatalog(CatalogState(
+      snapshot: CatalogSnapshot(schemaVersion: 1, serverTime: now, items: const []),
+    ));
+    final container = ProviderContainer(overrides: [
+      catalogProvider.overrideWith(() => catalog),
+      libraryIndexProvider.overrideWith(() => _FakeLibrary(const {})),
+      progressProvider.overrideWith(() => _FakeProgress(const {})),
+    ]);
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: LibraryPage()),
+    ));
+    await tester.pump();
+
+    catalog.emit(CatalogState(
+      snapshot: CatalogSnapshot(schemaVersion: 1, serverTime: now, items: const []),
+      fromNetwork: true,
+      prunedCount: 2,
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('已清理 2 个服务端已删除的条目'), findsOneWidget);
+  });
 }
 
 class _FakeCatalog extends CatalogNotifier {
-  _FakeCatalog(this.snapshot);
+  _FakeCatalog(this.current);
 
-  final CatalogSnapshot snapshot;
+  CatalogState current;
 
   @override
-  Future<CatalogState> build() async => CatalogState(snapshot: snapshot);
+  Future<CatalogState> build() async => current;
+
+  void emit(CatalogState next) {
+    current = next;
+    state = AsyncData(next);
+  }
 }
 
 class _FakeLibrary extends LibraryIndexNotifier {

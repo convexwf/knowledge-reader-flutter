@@ -64,6 +64,7 @@ flutter build apk --debug --dart-define=SERVER_BASE_URL=http://127.0.0.1:18765 -
 - **不要在 notifier 里 `ref.invalidate` 依赖自己的 provider**：会抛 `CircularDependencyError`。依赖变化会自动传播，不需要手动失效。
 - **`await` 之后不要依赖 `BuildContext`**：列表重建会让当前 widget 卸载，`context.mounted` 变 false，跳转会被静默吞掉。需要导航时在 `await` 之前取好 `GoRouter.of(context)` 或 `NavigatorState`。
 - `const {}` 的运行时类型是 `_ConstMap<dynamic, dynamic>`，`as Map<String, dynamic>` 会抛。解析 JSON 用宽容转换（见 `_stringMap` 的写法）。
+- **不要在 `AsyncNotifier.build()` 里 watch 另一个异步 provider、再在 `await` 之后读它的值**：依赖解析会打断正在进行的构建，导致 `container.read(x.future)` 永远不完成（踩过，两个测试各超时 30 秒才定位到）。把副作用放在"知道上下文"的那个 provider（例如目录同步后的对账放在 `CatalogNotifier`），让下游 provider 由调用方显式 `refresh()`。
 - `IntrinsicColumnWidth` 没有 `minWidth` 参数。
 - `Text.rich` 渲染的内容 `Text.data` 为 null，测试里用扫描 `RichText.text.toPlainText()` 的 finder（integration test 里的 `richTextContaining`）。
 

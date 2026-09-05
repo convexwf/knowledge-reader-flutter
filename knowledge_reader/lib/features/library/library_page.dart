@@ -21,6 +21,18 @@ class LibraryPage extends ConsumerWidget {
     final progress = ref.watch(progressProvider).value ?? const {};
     final downloads = ref.watch(downloadProvider);
 
+    // A fresh catalog may have removed local packages; refresh the local index
+    // and tell the user instead of letting rows silently disappear.
+    ref.listen(catalogProvider, (previous, next) {
+      final state = next.value;
+      if (state == null || state.prunedCount == 0) return;
+      ref.read(libraryIndexProvider.notifier).refresh();
+      ref.read(progressProvider.notifier).refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已清理 ${state.prunedCount} 个服务端已删除的条目')),
+      );
+    });
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('知识库'),
@@ -28,7 +40,7 @@ class LibraryPage extends ConsumerWidget {
           IconButton(
             tooltip: '同步目录',
             icon: const Icon(Icons.sync),
-            onPressed: () => ref.read(catalogProvider.notifier).sync(),
+            onPressed: () => _sync(context, ref),
           ),
           IconButton(
             tooltip: '设置',
@@ -44,10 +56,7 @@ class LibraryPage extends ConsumerWidget {
           final items = state.snapshot.items;
           if (items.isEmpty) return _message(context, ref, '目录为空，先同步一次');
           return RefreshIndicator(
-            onRefresh: () async {
-              await ref.read(catalogProvider.notifier).sync();
-              await ref.read(progressProvider.notifier).refresh();
-            },
+            onRefresh: () => _sync(context, ref),
             child: ListView.separated(
               itemCount: items.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
@@ -132,6 +141,14 @@ class LibraryPage extends ConsumerWidget {
       onTap: () => _open(context, ref, item, state),
       onLongPress: () => _showActions(context, ref, item, local, state),
     );
+  }
+
+  /// Syncs the catalog, waits for the local reconciliation to finish and tells
+  /// the user when server-side deletions removed local packages.
+  Future<void> _sync(BuildContext context, WidgetRef ref) async {
+    await ref.read(catalogProvider.notifier).sync();
+    await ref.read(libraryIndexProvider.notifier).refresh();
+    await ref.read(progressProvider.notifier).refresh();
   }
 
   Widget _trailing(WidgetRef ref, CatalogItem item, LocalContentState state, DownloadState? download) {

@@ -70,10 +70,22 @@ Provider<ServerClient?> serverClientProvider = Provider<ServerClient?>((ref) {
 
 /// Catalog snapshot plus the ETag needed for the next conditional request.
 class CatalogState {
-  const CatalogState({required this.snapshot, this.etag});
+  const CatalogState({
+    required this.snapshot,
+    this.etag,
+    this.fromNetwork = false,
+    this.prunedCount = 0,
+  });
 
   final CatalogSnapshot snapshot;
   final String? etag;
+
+  /// True only when the snapshot came from a 200 response in this session.
+  /// Cached fallbacks must never trigger destructive reconciliation.
+  final bool fromNetwork;
+
+  /// Local packages removed because the server no longer lists them.
+  final int prunedCount;
 }
 
 class CatalogNotifier extends AsyncNotifier<CatalogState> {
@@ -97,8 +109,20 @@ class CatalogNotifier extends AsyncNotifier<CatalogState> {
       final snapshot = result.snapshot ?? cached;
       if (snapshot == null) throw ServerException('服务器未返回目录');
       await store.writeCatalog(snapshot);
+      // Reconcile local packages against a fresh snapshot only: a cached
+      // fallback must never delete content that still exists on the server.
+      var pruned = 0;
+      if (result.snapshot != null) {
+        final keep = snapshot.items.map((item) => item.itemId).toSet();
+        pruned = (await store.pruneMissing(keep)).length;
+      }
       _etag = result.etag;
-      return CatalogState(snapshot: snapshot, etag: result.etag);
+      return CatalogState(
+        snapshot: snapshot,
+        etag: result.etag,
+        fromNetwork: result.snapshot != null,
+        prunedCount: pruned,
+      );
     } on ServerException {
       if (cached != null) return CatalogState(snapshot: cached);
       rethrow;
@@ -125,6 +149,7 @@ class LibraryIndexNotifier extends AsyncNotifier<Map<String, LocalItemState>> {
     state = const AsyncLoading();
     state = await AsyncValue.guard(build);
   }
+
 }
 
 final libraryIndexProvider =
